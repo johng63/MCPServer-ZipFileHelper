@@ -18,7 +18,7 @@ const pipelineAsync = promisify(pipeline);
 
 // Get user's Downloads and Documents directories
 const DOWNLOADS_DIR = path.join(os.homedir(), "Downloads");
-const DOCUMENTS_DIR = path.join(os.homedir(), "Documents");
+const DOCUMENTS_DIR = path.join(os.homedir(), String.raw`OneDrive\Documents`);
 
 class FileManagerServer {
     constructor() {
