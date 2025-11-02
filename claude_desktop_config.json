@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "file-manager": {
+            "command": "node",
+            "args": [
+                "C:\\MCPServer-ZipFileHelper\\index.js"
+            ]
+        }
+    }
+}

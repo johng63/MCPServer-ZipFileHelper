@@ -1,0 +1,26 @@
+{
+    "name": "file-manager-mcp-server",
+    "version": "1.0.0",
+    "description": "MCP server for managing files - unzipping and organizing SVGs",
+    "type": "module",
+    "main": "index.js",
+    "bin": {
+        "file-manager-mcp": "./index.js"
+    },
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.0.4",
+        "adm-zip": "^0.5.16"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "keywords": [
+        "mcp",
+        "file-manager",
+        "unzip",
+        "svg"
+    ]
+}
