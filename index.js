@@ -18,7 +18,7 @@ const pipelineAsync = promisify(pipeline);
 
 // Get user's Downloads and Documents directories
 const DOWNLOADS_DIR = path.join(os.homedir(), "Downloads");
-const DOCUMENTS_DIR = path.join(os.homedir(), String.raw`OneDrive\Documents`);
+const DOCUMENTS_DIR = path.join(os.homedir(), "Documents");
 
 class FileManagerServer {
     constructor() {
@@ -92,10 +92,59 @@ class FileManagerServer {
                 },
                 {
                     name: "list_zip_files",
-                    description: "List all zip files in the Downloads directory",
+                    description: "List all zip files in the Downloads directory, sorted by date (newest first)",
                     inputSchema: {
                         type: "object",
-                        properties: {},
+                        properties: {
+                            limit: {
+                                type: "number",
+                                description: "Optional: Maximum number of files to show (default: 10)",
+                            },
+                        },
+                    },
+                },
+                {
+                    name: "list_recent_downloads",
+                    description: "Show the most recently downloaded files in the Downloads directory",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            limit: {
+                                type: "number",
+                                description: "Optional: Number of recent files to show (default: 10)",
+                            },
+                            file_type: {
+                                type: "string",
+                                description: "Optional: Filter by file extension (e.g., 'zip', 'pdf', 'svg')",
+                            },
+                        },
+                    },
+                },
+                {
+                    name: "unzip_latest",
+                    description: "Unzip the most recently downloaded zip file from Downloads",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            destination: {
+                                type: "string",
+                                description: "Optional: Where to extract files (defaults to Downloads). Use 'downloads' or 'documents' or a specific path.",
+                            },
+                        },
+                    },
+                },
+                {
+                    name: "unzip_latest_and_move_svgs",
+                    description: "Unzip the most recently downloaded zip file and move all SVG files to a specified folder in Documents",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            destination_folder: {
+                                type: "string",
+                                description: "Subfolder in Documents where SVG files should go (e.g., 'DoorHanger', 'Icons')",
+                            },
+                        },
+                        required: ["destination_folder"],
                     },
                 },
                 {
@@ -142,11 +191,17 @@ class FileManagerServer {
                     case "move_svg_files":
                         return await this.handleMoveSvg(request.params.arguments);
                     case "list_zip_files":
-                        return await this.handleListZip();
+                        return await this.handleListZip(request.params.arguments);
                     case "list_svg_files":
                         return await this.handleListSvg(request.params.arguments);
                     case "unzip_and_move_svgs":
                         return await this.handleUnzipAndMoveSvgs(request.params.arguments);
+                    case "list_recent_downloads":
+                        return await this.handleListRecentDownloads(request.params.arguments);
+                    case "unzip_latest":
+                        return await this.handleUnzipLatest(request.params.arguments);
+                    case "unzip_latest_and_move_svgs":
+                        return await this.handleUnzipLatestAndMoveSvgs(request.params.arguments);
                     default:
                         throw new Error(`Unknown tool: ${request.params.name}`);
                 }
@@ -282,7 +337,8 @@ class FileManagerServer {
         };
     }
 
-    async handleListZip() {
+    async handleListZip(args) {
+        const limit = args?.limit || 10;
         const files = await fs.readdir(DOWNLOADS_DIR);
         const zipFiles = files.filter((f) => f.toLowerCase().endsWith(".zip"));
 
@@ -297,21 +353,36 @@ class FileManagerServer {
             };
         }
 
-        // Get file details
+        // Get file details with timestamps
         const fileDetails = await Promise.all(
             zipFiles.map(async (file) => {
                 const filePath = path.join(DOWNLOADS_DIR, file);
                 const stats = await fs.stat(filePath);
-                const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
-                return `${file} (${sizeMB} MB)`;
+                return {
+                    name: file,
+                    size: stats.size,
+                    modified: stats.mtime,
+                };
             })
         );
+
+        // Sort by modified date (newest first)
+        fileDetails.sort((a, b) => b.modified - a.modified);
+
+        // Limit results
+        const limitedFiles = fileDetails.slice(0, limit);
+
+        const fileList = limitedFiles.map((file) => {
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            const date = file.modified.toLocaleString();
+            return `${file.name} (${sizeMB} MB) - ${date}`;
+        });
 
         return {
             content: [
                 {
                     type: "text",
-                    text: `Found ${zipFiles.length} zip file(s) in Downloads:\n\n${fileDetails.join("\n")}`,
+                    text: `Found ${zipFiles.length} zip file(s) in Downloads (showing ${limitedFiles.length} most recent):\n\n${fileList.join("\n")}`,
                 },
             ],
         };
