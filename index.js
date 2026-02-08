@@ -179,6 +179,107 @@ class FileManagerServer {
                         required: ["filename", "destination_folder"],
                     },
                 },
+                {
+                    name: "create_directory",
+                    description: "Create a new directory/folder. Can create in Documents, Downloads, or specify a full path.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            name: {
+                                type: "string",
+                                description: "Name of the folder to create (e.g., 'MyProject', 'Photos/Vacation2024')",
+                            },
+                            location: {
+                                type: "string",
+                                description: "Optional: Where to create the folder. Use 'documents' (default), 'downloads', or a full path.",
+                            },
+                        },
+                        required: ["name"],
+                    },
+                },
+                {
+                    name: "move_latest_svg",
+                    description: "Move only the most recently downloaded/modified SVG file from Downloads to a folder in Documents",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            destination_folder: {
+                                type: "string",
+                                description: "Subfolder in Documents where the SVG file should go (e.g., 'DoorHanger', 'Icons')",
+                            },
+                            source: {
+                                type: "string",
+                                description: "Optional: Source directory to search (defaults to Downloads)",
+                            },
+                        },
+                        required: ["destination_folder"],
+                    },
+                },
+                {
+                    name: "copy_file",
+                    description: "Copy a specific file by name from Downloads to Documents or another location",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            filename: {
+                                type: "string",
+                                description: "Name of the file to copy (e.g., 'report.pdf', 'image.png')",
+                            },
+                            destination_folder: {
+                                type: "string",
+                                description: "Optional: Subfolder in Documents where the file should go. If not specified, copies to Documents root.",
+                            },
+                            source: {
+                                type: "string",
+                                description: "Optional: Source directory (defaults to Downloads). Can be 'downloads', 'documents', or a full path.",
+                            },
+                        },
+                        required: ["filename"],
+                    },
+                },
+                {
+                    name: "move_file",
+                    description: "Move a specific file by name from Downloads to Documents or another location (removes from original location)",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            filename: {
+                                type: "string",
+                                description: "Name of the file to move (e.g., 'report.pdf', 'image.png')",
+                            },
+                            destination_folder: {
+                                type: "string",
+                                description: "Optional: Subfolder in Documents where the file should go. If not specified, moves to Documents root.",
+                            },
+                            source: {
+                                type: "string",
+                                description: "Optional: Source directory (defaults to Downloads). Can be 'downloads', 'documents', or a full path.",
+                            },
+                        },
+                        required: ["filename"],
+                    },
+                },
+                {
+                    name: "list_files",
+                    description: "List files in a directory, sorted by most recent first. Can filter by file type.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            directory: {
+                                type: "string",
+                                description: "Optional: Directory to list (defaults to Downloads). Can be 'downloads', 'documents', a subfolder like 'documents/Projects', or a full path.",
+                            },
+                            file_type: {
+                                type: "string",
+                                description: "Optional: Filter by file extension (e.g., 'pdf', 'svg', 'png')",
+                            },
+                            limit: {
+                                type: "number",
+                                description: "Optional: Maximum number of files to show (default: 20)",
+                            },
+                        },
+                    },
+                },
             ],
         }));
 
@@ -202,6 +303,16 @@ class FileManagerServer {
                         return await this.handleUnzipLatest(request.params.arguments);
                     case "unzip_latest_and_move_svgs":
                         return await this.handleUnzipLatestAndMoveSvgs(request.params.arguments);
+                    case "create_directory":
+                        return await this.handleCreateDirectory(request.params.arguments);
+                    case "move_latest_svg":
+                        return await this.handleMoveLatestSvg(request.params.arguments);
+                    case "copy_file":
+                        return await this.handleCopyFile(request.params.arguments);
+                    case "move_file":
+                        return await this.handleMoveFile(request.params.arguments);
+                    case "list_files":
+                        return await this.handleListFiles(request.params.arguments);
                     default:
                         throw new Error(`Unknown tool: ${request.params.name}`);
                 }
@@ -523,6 +634,377 @@ class FileManagerServer {
                 {
                     type: "text",
                     text: `Success! 🎉\n\n1. Unzipped ${args.filename} (${entries.length} total files)\n2. Found ${svgFiles.length} SVG file(s)\n3. Moved all SVGs to Documents\\${destinationFolder}\n\nMoved files:\n${movedFiles.join("\n")}`,
+                },
+            ],
+        };
+    }
+
+    async handleCreateDirectory(args) {
+        const name = args.name;
+        if (!name) {
+            throw new Error("name is required");
+        }
+
+        const location = (args.location || "documents").toLowerCase();
+
+        let baseDir;
+        if (location === "documents") {
+            baseDir = DOCUMENTS_DIR;
+        } else if (location === "downloads") {
+            baseDir = DOWNLOADS_DIR;
+        } else {
+            baseDir = path.resolve(location);
+        }
+
+        const newDir = path.join(baseDir, name);
+
+        try {
+            await fs.access(newDir);
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Directory already exists: ${newDir}`,
+                    },
+                ],
+            };
+        } catch {
+            // Directory doesn't exist, create it
+        }
+
+        await fs.mkdir(newDir, { recursive: true });
+
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully created directory: ${newDir}`,
+                },
+            ],
+        };
+    }
+
+    async handleMoveLatestSvg(args) {
+        const destinationFolder = args.destination_folder;
+        if (!destinationFolder) {
+            throw new Error("destination_folder is required");
+        }
+
+        const sourceDir = args.source
+            ? path.resolve(args.source)
+            : DOWNLOADS_DIR;
+
+        try {
+            await fs.access(sourceDir);
+        } catch {
+            throw new Error(`Source directory not found: ${sourceDir}`);
+        }
+
+        // Find all SVG files
+        const svgFiles = await this.findFiles(sourceDir, ".svg");
+
+        if (svgFiles.length === 0) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `No SVG files found in ${sourceDir}`,
+                    },
+                ],
+            };
+        }
+
+        // Get the most recent SVG file by modification time
+        const fileStats = await Promise.all(
+            svgFiles.map(async (filePath) => {
+                const stats = await fs.stat(filePath);
+                return { filePath, mtime: stats.mtime };
+            })
+        );
+        const latestSvg = fileStats.reduce((latest, current) =>
+            current.mtime > latest.mtime ? current : latest
+        ).filePath;
+
+        // Create destination folder in Documents
+        const destDir = path.join(DOCUMENTS_DIR, destinationFolder);
+        await fs.mkdir(destDir, { recursive: true });
+
+        // Determine destination path
+        const svgName = path.basename(latestSvg);
+        let finalDestPath = path.join(destDir, svgName);
+
+        // Handle duplicate filenames
+        let counter = 1;
+        while (true) {
+            try {
+                await fs.access(finalDestPath);
+                const ext = path.extname(svgName);
+                const base = path.basename(svgName, ext);
+                finalDestPath = path.join(destDir, `${base}_${counter}${ext}`);
+                counter++;
+            } catch {
+                break;
+            }
+        }
+
+        // Move the file
+        await fs.rename(latestSvg, finalDestPath);
+
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully moved the latest SVG file to ${finalDestPath}\n\nFile: ${svgName}`,
+                },
+            ],
+        };
+    }
+
+    async handleCopyFile(args) {
+        const filename = args.filename;
+        if (!filename) {
+            throw new Error("filename is required");
+        }
+
+        // Determine source directory
+        const sourceArg = (args.source || "downloads").toLowerCase();
+        let sourceDir;
+        if (sourceArg === "downloads") {
+            sourceDir = DOWNLOADS_DIR;
+        } else if (sourceArg === "documents") {
+            sourceDir = DOCUMENTS_DIR;
+        } else {
+            sourceDir = path.resolve(sourceArg);
+        }
+
+        let sourceFile = path.join(sourceDir, filename);
+
+        try {
+            await fs.access(sourceFile);
+        } catch {
+            // Try to find the file recursively
+            const foundFiles = await this.findFiles(sourceDir, path.extname(filename));
+            const match = foundFiles.find((f) => path.basename(f) === filename);
+            if (match) {
+                sourceFile = match;
+            } else {
+                throw new Error(`File not found: ${filename} in ${sourceDir}`);
+            }
+        }
+
+        // Determine destination
+        const destFolder = args.destination_folder || "";
+        let destDir;
+        if (destFolder) {
+            destDir = path.join(DOCUMENTS_DIR, destFolder);
+        } else {
+            destDir = DOCUMENTS_DIR;
+        }
+
+        await fs.mkdir(destDir, { recursive: true });
+
+        // Determine destination path
+        const sourceName = path.basename(sourceFile);
+        let finalDestPath = path.join(destDir, sourceName);
+
+        // Handle duplicate filenames
+        let counter = 1;
+        while (true) {
+            try {
+                await fs.access(finalDestPath);
+                const ext = path.extname(sourceName);
+                const base = path.basename(sourceName, ext);
+                finalDestPath = path.join(destDir, `${base}_${counter}${ext}`);
+                counter++;
+            } catch {
+                break;
+            }
+        }
+
+        // Copy the file
+        await fs.copyFile(sourceFile, finalDestPath);
+
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully copied ${sourceName} to ${finalDestPath}`,
+                },
+            ],
+        };
+    }
+
+    async handleMoveFile(args) {
+        const filename = args.filename;
+        if (!filename) {
+            throw new Error("filename is required");
+        }
+
+        // Determine source directory
+        const sourceArg = (args.source || "downloads").toLowerCase();
+        let sourceDir;
+        if (sourceArg === "downloads") {
+            sourceDir = DOWNLOADS_DIR;
+        } else if (sourceArg === "documents") {
+            sourceDir = DOCUMENTS_DIR;
+        } else {
+            sourceDir = path.resolve(sourceArg);
+        }
+
+        let sourceFile = path.join(sourceDir, filename);
+
+        try {
+            await fs.access(sourceFile);
+        } catch {
+            // Try to find the file recursively
+            const foundFiles = await this.findFiles(sourceDir, path.extname(filename));
+            const match = foundFiles.find((f) => path.basename(f) === filename);
+            if (match) {
+                sourceFile = match;
+            } else {
+                throw new Error(`File not found: ${filename} in ${sourceDir}`);
+            }
+        }
+
+        // Determine destination
+        const destFolder = args.destination_folder || "";
+        let destDir;
+        if (destFolder) {
+            destDir = path.join(DOCUMENTS_DIR, destFolder);
+        } else {
+            destDir = DOCUMENTS_DIR;
+        }
+
+        await fs.mkdir(destDir, { recursive: true });
+
+        // Determine destination path
+        const sourceName = path.basename(sourceFile);
+        let finalDestPath = path.join(destDir, sourceName);
+
+        // Handle duplicate filenames
+        let counter = 1;
+        while (true) {
+            try {
+                await fs.access(finalDestPath);
+                const ext = path.extname(sourceName);
+                const base = path.basename(sourceName, ext);
+                finalDestPath = path.join(destDir, `${base}_${counter}${ext}`);
+                counter++;
+            } catch {
+                break;
+            }
+        }
+
+        // Move the file
+        await fs.rename(sourceFile, finalDestPath);
+
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully moved ${filename} to ${finalDestPath}`,
+                },
+            ],
+        };
+    }
+
+    async handleListFiles(args) {
+        const limit = args?.limit || 20;
+        const fileType = (args?.file_type || "").toLowerCase().replace(/^\./, "");
+
+        // Determine directory
+        const dirArg = (args?.directory || "downloads").toLowerCase();
+        let searchDir;
+        if (dirArg === "downloads") {
+            searchDir = DOWNLOADS_DIR;
+        } else if (dirArg === "documents") {
+            searchDir = DOCUMENTS_DIR;
+        } else if (dirArg.startsWith("documents/") || dirArg.startsWith("documents\\")) {
+            const subfolder = dirArg.includes("/")
+                ? dirArg.split("/").slice(1).join("/")
+                : dirArg.split("\\").slice(1).join("\\");
+            searchDir = path.join(DOCUMENTS_DIR, subfolder);
+        } else if (dirArg.startsWith("downloads/") || dirArg.startsWith("downloads\\")) {
+            const subfolder = dirArg.includes("/")
+                ? dirArg.split("/").slice(1).join("/")
+                : dirArg.split("\\").slice(1).join("\\");
+            searchDir = path.join(DOWNLOADS_DIR, subfolder);
+        } else {
+            searchDir = path.resolve(dirArg);
+        }
+
+        try {
+            await fs.access(searchDir);
+        } catch {
+            throw new Error(`Directory not found: ${searchDir}`);
+        }
+
+        // Get file details
+        const entries = await fs.readdir(searchDir, { withFileTypes: true });
+        let fileDetails = [];
+
+        for (const entry of entries) {
+            if (entry.isFile()) {
+                try {
+                    const fullPath = path.join(searchDir, entry.name);
+                    const stats = await fs.stat(fullPath);
+                    const extension = path.extname(entry.name).toLowerCase().replace(/^\./, "");
+                    fileDetails.push({
+                        name: entry.name,
+                        size: stats.size,
+                        modified: stats.mtime,
+                        extension,
+                    });
+                } catch {
+                    // Skip files that can't be stat'd
+                }
+            }
+        }
+
+        // Apply file type filter
+        if (fileType) {
+            fileDetails = fileDetails.filter((f) => f.extension === fileType);
+        }
+
+        if (fileDetails.length === 0) {
+            const typeMsg = fileType ? ` of type '.${fileType}'` : "";
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `No files${typeMsg} found in ${searchDir}`,
+                    },
+                ],
+            };
+        }
+
+        // Sort by modified date (newest first)
+        fileDetails.sort((a, b) => b.modified - a.modified);
+
+        // Limit results
+        const limitedFiles = fileDetails.slice(0, limit);
+
+        const fileList = limitedFiles.map((file, index) => {
+            let displaySize;
+            if (file.size > 1024 * 1024) {
+                displaySize = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+            } else if (file.size > 1024) {
+                displaySize = `${(file.size / 1024).toFixed(2)} KB`;
+            } else {
+                displaySize = `${file.size} bytes`;
+            }
+
+            const dateStr = file.modified.toLocaleString();
+            const badge = index === 0 ? " [LATEST]" : "";
+            return `${file.name}${badge}\n  Size: ${displaySize} | Modified: ${dateStr}`;
+        });
+
+        const typeMsg = fileType ? ` (filtered to .${fileType} files)` : "";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Files in ${searchDir}${typeMsg}\nShowing ${limitedFiles.length} of ${fileDetails.length} (sorted by most recent):\n\n${fileList.join("\n\n")}`,
                 },
             ],
         };
