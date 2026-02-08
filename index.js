@@ -639,6 +639,132 @@ class FileManagerServer {
         };
     }
 
+    async handleListRecentDownloads(args) {
+        const limit = args?.limit || 10;
+        const fileType = (args?.file_type || "").toLowerCase().replace(/^\./, "");
+
+        const entries = await fs.readdir(DOWNLOADS_DIR, { withFileTypes: true });
+        let fileDetails = [];
+
+        for (const entry of entries) {
+            if (entry.isFile()) {
+                try {
+                    const fullPath = path.join(DOWNLOADS_DIR, entry.name);
+                    const stats = await fs.stat(fullPath);
+                    const extension = path.extname(entry.name).toLowerCase().replace(/^\./, "");
+                    fileDetails.push({
+                        name: entry.name,
+                        size: stats.size,
+                        modified: stats.mtime,
+                        extension,
+                    });
+                } catch {
+                    // Skip files that can't be stat'd
+                }
+            }
+        }
+
+        // Apply file type filter
+        if (fileType) {
+            fileDetails = fileDetails.filter((f) => f.extension === fileType);
+        }
+
+        if (fileDetails.length === 0) {
+            const typeMsg = fileType ? ` of type '.${fileType}'` : "";
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `No files${typeMsg} found in ${DOWNLOADS_DIR}`,
+                    },
+                ],
+            };
+        }
+
+        // Sort by modified date (newest first)
+        fileDetails.sort((a, b) => b.modified - a.modified);
+
+        const limitedFiles = fileDetails.slice(0, limit);
+
+        const fileList = limitedFiles.map((file, index) => {
+            let displaySize;
+            if (file.size > 1024 * 1024) {
+                displaySize = `${(file.size / (1024 * 1024)).toFixed(2)} MB`;
+            } else if (file.size > 1024) {
+                displaySize = `${(file.size / 1024).toFixed(2)} KB`;
+            } else {
+                displaySize = `${file.size} bytes`;
+            }
+
+            const dateStr = file.modified.toLocaleString();
+            const badge = index === 0 ? " [LATEST]" : "";
+            return `${file.name}${badge}\n  Size: ${displaySize} | Modified: ${dateStr}`;
+        });
+
+        const typeMsg = fileType ? ` (filtered to .${fileType} files)` : "";
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Recent downloads${typeMsg}\nShowing ${limitedFiles.length} of ${fileDetails.length} (sorted by most recent):\n\n${fileList.join("\n\n")}`,
+                },
+            ],
+        };
+    }
+
+    async handleUnzipLatest(args) {
+        // Find the most recent zip file in Downloads
+        const files = await fs.readdir(DOWNLOADS_DIR);
+        const zipFiles = files.filter((f) => f.toLowerCase().endsWith(".zip"));
+
+        if (zipFiles.length === 0) {
+            throw new Error("No zip files found in Downloads");
+        }
+
+        const fileDetails = await Promise.all(
+            zipFiles.map(async (file) => {
+                const filePath = path.join(DOWNLOADS_DIR, file);
+                const stats = await fs.stat(filePath);
+                return { name: file, mtime: stats.mtime };
+            })
+        );
+
+        fileDetails.sort((a, b) => b.mtime - a.mtime);
+        const latestZip = fileDetails[0].name;
+
+        // Delegate to handleUnzip with the latest zip file
+        return await this.handleUnzip({ filename: latestZip, destination: args?.destination });
+    }
+
+    async handleUnzipLatestAndMoveSvgs(args) {
+        const destinationFolder = args?.destination_folder;
+        if (!destinationFolder) {
+            throw new Error("destination_folder is required");
+        }
+
+        // Find the most recent zip file in Downloads
+        const files = await fs.readdir(DOWNLOADS_DIR);
+        const zipFiles = files.filter((f) => f.toLowerCase().endsWith(".zip"));
+
+        if (zipFiles.length === 0) {
+            throw new Error("No zip files found in Downloads");
+        }
+
+        const fileDetails = await Promise.all(
+            zipFiles.map(async (file) => {
+                const filePath = path.join(DOWNLOADS_DIR, file);
+                const stats = await fs.stat(filePath);
+                return { name: file, mtime: stats.mtime };
+            })
+        );
+
+        fileDetails.sort((a, b) => b.mtime - a.mtime);
+        const latestZip = fileDetails[0].name;
+
+        // Delegate to handleUnzipAndMoveSvgs with the latest zip file
+        return await this.handleUnzipAndMoveSvgs({ filename: latestZip, destination_folder: destinationFolder });
+    }
+
     async handleCreateDirectory(args) {
         const name = args.name;
         if (!name) {
